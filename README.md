@@ -23,7 +23,7 @@ Both patches are needed. Stock prospero-win doesn't include them.
 YOU NEED
   - A jailbroken PS5 with prospero-win installed and working.
   - A PC with WSL (Ubuntu 24.04), prospero-win's source and its build setup
-    (docs/DEVELOPMENT.md).
+    (docs/DEVELOPMENT.md). Linux/Mac machines work as well.
   - Halo: The Master Chief Collection on Steam with Halo 3 Campaign and Halo 3
     Multiplayer installed. Uninstall the other MCC games first to keep the copy
     small.
