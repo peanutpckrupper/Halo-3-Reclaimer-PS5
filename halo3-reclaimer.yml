@@ -1,0 +1,77 @@
+# Halo 3 through Project Reclaimer, for prospero-win (builds the prefix; use the .profile in this folder to run it)
+#
+# Needs your own Steam copy of Halo: The Master Chief Collection with Halo 3
+# Campaign and Halo 3 Multiplayer installed, plus project-reclaimer-v0.9.13.exe
+# placed in the MCC folder. Uninstall the other MCC games in Steam first to
+# keep the copy small.
+#
+# Reclaimer finds MCC through Steam's library folders, so the prefix gets the
+# same layout Steam uses on Windows: the game in
+# C:\Program Files (x86)\Steam\steamapps\common\Halo The Master Chief Collection,
+# Steam's libraryfolders.vdf and MCC's appmanifest beside it, and Steam's
+# registry keys. No Steam client is installed or run.
+#
+# The profile starts project-reclaimer-v0.9.13.exe directly with "game-client",
+# never MCC's launcher, since Wine on the console does not start other
+# processes. Don't use Reclaimer's "Update & restart" on the console; update
+# on the PC and push again.
+#
+# Unknowns: Reclaimer draws its menus with OpenGL 3.0 and Halo 3 draws with
+# Direct3D 11 (through DXVK here).
+#
+# Usage (inside WSL/Ubuntu, from ~/prospero-win):
+#   python3 tools/pw_install.py ~/halo3-reclaimer.yml \
+#       --library ~/prospero-library \
+#       --wine ~/prospero-win/.deps/wine-host/install/usr/bin/wine \
+#       --file game="/mnt/c/Program Files (x86)/Steam/steamapps/common/Halo The Master Chief Collection" \
+#       --file libraryfolders="/mnt/c/Program Files (x86)/Steam/steamapps/libraryfolders.vdf" \
+#       --file appmanifest="/mnt/c/Program Files (x86)/Steam/steamapps/appmanifest_976730.acf"
+
+name: "Halo 3 (Project Reclaimer)"
+game_slug: halo3-reclaimer
+version: Project Reclaimer 0.9.13 on a Steam copy of MCC (prospero-win)
+slug: halo3-reclaimer
+runner: wine
+prospero:
+  name: "Halo 3 (Reclaimer, experimental)"
+  graphics: dxvk
+  display: {desktop: 1920x1080}
+  input: {mode: xinput}
+script:
+  game:
+    exe: "drive_c/Program Files (x86)/Steam/steamapps/common/Halo The Master Chief Collection/project-reclaimer-v0.9.13.exe"
+    prefix: $GAMEDIR
+    args: game-client
+  files:
+  - game: "N/A:Select your Halo The Master Chief Collection folder (it holds the mcc folder and project-reclaimer-v0.9.13.exe)"
+  - libraryfolders: "N/A:Select Steam's steamapps/libraryfolders.vdf"
+  - appmanifest: "N/A:Select Steam's steamapps/appmanifest_976730.acf"
+  wine:
+    dxvk: true
+  installer:
+  - task: {name: create_prefix, prefix: $GAMEDIR, arch: win64}
+  - copy:
+      src: game
+      dst: "$GAMEDIR/drive_c/Program Files (x86)/Steam/steamapps/common/Halo The Master Chief Collection"
+  - copy:
+      src: libraryfolders
+      dst: "$GAMEDIR/drive_c/Program Files (x86)/Steam/steamapps"
+  - copy:
+      src: appmanifest
+      dst: "$GAMEDIR/drive_c/Program Files (x86)/Steam/steamapps"
+  # Where Steam is, as Steam's installer writes it.
+  - task:
+      name: set_regedit
+      path: HKEY_CURRENT_USER\Software\Valve\Steam
+      key: SteamPath
+      value: c:/program files (x86)/steam
+  - task:
+      name: set_regedit
+      path: HKEY_LOCAL_MACHINE\SOFTWARE\Wow6432Node\Valve\Steam
+      key: InstallPath
+      value: C:\Program Files (x86)\Steam
+  - task:
+      name: set_regedit
+      path: HKEY_LOCAL_MACHINE\SOFTWARE\Valve\Steam
+      key: InstallPath
+      value: C:\Program Files (x86)\Steam

@@ -1,0 +1,86 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Sun, 11 Oct 2026 17:00:00 -0400
+Subject: [PATCH] ntdll: Read and write this process without the server.
+
+NtWriteVirtualMemory always asks the server to write, and the server
+reaches a process with process_vm_writev or ptrace. A PS5 title has
+neither, so every WriteProcessMemory a program made to itself failed:
+Project Reclaimer's engine worker could not hand Halo 3 its asset paths,
+key bindings or controller settings, and kept retrying every frame.
+NtReadVirtualMemory already copies in process for the pseudo-handle, but
+a real handle to this process (OpenProcess( GetCurrentProcessId() ), as
+toolhelp's module snapshot uses) still went to the server and failed the
+same way, so Module32First found no modules.
+
+Treat any handle that names this process as the current process: reads
+keep their guarded copy, and writes use virtual_uninterrupted_write_memory,
+which checks each page's access without faulting and keeps write watches
+current. WriteProcessMemory has already made read-only pages writable, as
+on Windows. Other processes still go through the server.
+---
+ dlls/ntdll/unix/virtual.c | 35 +++++++++++++++++++++++++++++++++--
+ 1 file changed, 33 insertions(+), 2 deletions(-)
+
+diff --git a/dlls/ntdll/unix/virtual.c b/dlls/ntdll/unix/virtual.c
+--- a/dlls/ntdll/unix/virtual.c
++++ b/dlls/ntdll/unix/virtual.c
+@@ -6816,6 +6816,23 @@
+ 
+ 
+ /***********************************************************************
++ *           is_this_process
++ *
++ * Whether a process handle names this process: the pseudo-handle, or a
++ * real handle such as OpenProcess( GetCurrentProcessId() ) returns.
++ */
++static BOOL is_this_process( HANDLE process )
++{
++    PROCESS_BASIC_INFORMATION pbi;
++
++    if (process == GetCurrentProcess()) return TRUE;
++    if (NtQueryInformationProcess( process, ProcessBasicInformation, &pbi, sizeof(pbi), NULL ))
++        return FALSE;
++    return pbi.UniqueProcessId == HandleToULong( NtCurrentTeb()->ClientId.UniqueProcess );
++}
++
++
++/***********************************************************************
+  *             NtReadVirtualMemory   (NTDLL.@)
+  *             ZwReadVirtualMemory   (NTDLL.@)
+  */
+@@ -6829,7 +6846,7 @@
+         status = STATUS_ACCESS_VIOLATION;
+         size = 0;
+     }
+-    else if (process == GetCurrentProcess())
++    else if (is_this_process( process ))
+     {
+         __TRY
+         {
+@@ -6868,7 +6885,21 @@
+ {
+     unsigned int status;
+ 
+-    if (virtual_check_buffer_for_read( buffer, size ))
++    if (virtual_check_buffer_for_read( buffer, size ) && is_this_process( process ))
++    {
++        /* Write into this process here rather than through the server,
++         * which needs process_vm_writev or ptrace to reach a process. A
++         * PS5 title has neither, so every WriteProcessMemory to itself
++         * failed there. WriteProcessMemory has already made read-only
++         * pages writable; this checks access per page, without faulting,
++         * and keeps write watches up to date. */
++        if ((status = virtual_uninterrupted_write_memory( addr, buffer, size )))
++        {
++            status = STATUS_PARTIAL_COPY;
++            size = 0;
++        }
++    }
++    else if (virtual_check_buffer_for_read( buffer, size ))
+     {
+         SERVER_START_REQ( write_process_memory )
+         {
+-- 
+2.43.0
+

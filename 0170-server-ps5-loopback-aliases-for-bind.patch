@@ -1,0 +1,101 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: prospero-win <prospero-win@invalid>
+Date: Sun, 11 Oct 2026 18:40:00 -0400
+Subject: [PATCH] server: Add loopback aliases for binds to 127.0.0.0/8 on the PS5.
+
+Windows answers every address in 127.0.0.0/8 locally, and programs bind
+local peers to addresses such as 127.0.1.14 to keep them apart (Project
+Reclaimer's local client transport does). The PS5's FreeBSD kernel only
+has 127.0.0.1 on its loopback interface, so those binds failed with
+EADDRNOTAVAIL ("Cannot assign requested address", WSAEADDRNOTAVAIL).
+
+Before such a bind, add the address to the loopback interface as an alias
+(SIOCAIFADDR, as "ifconfig lo0 alias" does) and log the result once per
+address as "wine-ps5: loopback alias ...".
+---
+diff --git a/server/sock.c b/server/sock.c
+index 0716b3f71f..90b937ff34 100644
+--- a/server/sock.c
++++ b/server/sock.c
+@@ -53,6 +53,9 @@
+ #ifdef HAVE_SYS_FILIO_H
+ # include <sys/filio.h>
+ #endif
++#ifdef __PROSPERO__
++# include <sys/sockio.h>
++#endif
+ #include <time.h>
+ #include <unistd.h>
+ #include <limits.h>
+@@ -2292,6 +2295,61 @@ static int bind_to_iface_name( int fd, in_addr_t bind_addr, const char *name )
+ 
+ #endif /* LINUX_BOUND_IF */
+ 
++#ifdef __PROSPERO__
++/* Windows treats every address in 127.0.0.0/8 as this machine, and programs
++ * bind sockets to addresses such as 127.0.1.14 to keep local peers apart.
++ * The PS5's kernel is FreeBSD's: only 127.0.0.1 is on its loopback
++ * interface, so such a bind fails with EADDRNOTAVAIL and nothing can reach
++ * the address either. Add the address to the loopback interface as an
++ * alias first, as "ifconfig lo0 alias" would. An alias lasts until the
++ * console restarts and is only reachable from the console itself. */
++static void ps5_add_loopback_alias( const struct sockaddr_in *addr )
++{
++    static in_addr_t tried[64];
++    static unsigned int tried_count;
++    in_addr_t host = ntohl( addr->sin_addr.s_addr );
++    struct ifaddrs *ifaddrs, *ifaddr;
++    struct ifaliasreq req;
++    struct sockaddr_in *sin;
++    unsigned int i;
++    int fd, ret;
++
++    if ((host >> 24) != 127 || host == INADDR_LOOPBACK) return;
++    if (!memcmp( &addr->sin_addr, magic_loopback_addr, 4 )) return;
++    for (i = 0; i < tried_count; i++) if (tried[i] == host) return;
++    if (tried_count < ARRAY_SIZE(tried)) tried[tried_count++] = host;
++
++    memset( &req, 0, sizeof(req) );
++    strcpy( req.ifra_name, "lo0" );
++    if (!getifaddrs( &ifaddrs ))
++    {
++        for (ifaddr = ifaddrs; ifaddr; ifaddr = ifaddr->ifa_next)
++        {
++            if (ifaddr->ifa_name && (ifaddr->ifa_flags & IFF_LOOPBACK))
++            {
++                snprintf( req.ifra_name, sizeof(req.ifra_name), "%s", ifaddr->ifa_name );
++                break;
++            }
++        }
++        freeifaddrs( ifaddrs );
++    }
++    sin = (struct sockaddr_in *)&req.ifra_addr;
++    sin->sin_len = sizeof(*sin);
++    sin->sin_family = AF_INET;
++    sin->sin_addr.s_addr = addr->sin_addr.s_addr;
++    sin = (struct sockaddr_in *)&req.ifra_mask;
++    sin->sin_len = sizeof(*sin);
++    sin->sin_family = AF_INET;
++    sin->sin_addr.s_addr = htonl( 0xffffffff );
++
++    if ((fd = socket( AF_INET, SOCK_DGRAM, 0 )) < 0) return;
++    ret = ioctl( fd, SIOCAIFADDR, &req );
++    fprintf( stderr, "wine-ps5: loopback alias %u.%u.%u.%u on %s: %s\n", host >> 24, (host >> 16) & 0xff,
++             (host >> 8) & 0xff, host & 0xff, req.ifra_name, ret ? strerror( errno ) : "added" );
++    close( fd );
++}
++#endif
++
+ /* Take bind() calls on any name corresponding to a local network adapter and
+  * restrict the given socket to operating only on the specified interface. This
+  * restriction consists of two components:
+@@ -3050,6 +3108,9 @@ static void sock_ioctl( struct fd *fd, ioctl_code_t code, struct async *async )
+ 
+         if (unix_addr.addr.sa_family == AF_INET)
+         {
++#ifdef __PROSPERO__
++            ps5_add_loopback_alias( &unix_addr.in );
++#endif
+             if (!memcmp( &unix_addr.in.sin_addr, magic_loopback_addr, 4 )
+                     || bind_to_interface( sock, &unix_addr.in ))
+                 bind_addr.in.sin_addr.s_addr = htonl( INADDR_ANY );
